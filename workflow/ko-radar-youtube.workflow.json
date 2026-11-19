@@ -1,0 +1,1482 @@
+{
+  "name": "KO Radar - YouTube (radar de outliers)",
+  "nodes": [
+    {
+      "id": "ba1c62d3-78e8-4584-bd5c-d90aba950a65",
+      "name": "Todo dia 04:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        192
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 4,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "1d628fe2-9f6a-44c3-8572-d24a52df9221",
+      "name": "Ler config",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        224,
+        288
+      ],
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "SEU_ID_DA_PLANILHA"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "config"
+        }
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "CONFIGURAR",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "b685532b-86e8-46c7-a89e-956450f07f72",
+      "name": "Teste manual",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        384
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "a60a3629-f6e4-43be-84fe-bfddde8dc751",
+      "name": "Ler execucoes",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        448,
+        288
+      ],
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "SEU_ID_DA_PLANILHA"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "execucoes"
+        }
+      },
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "CONFIGURAR",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "e92f1d42-aa66-4851-be91-052731a48d6b",
+      "name": "Montar buscas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        288
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Radar do YouTube (multi-nicho) - nó \"Montar buscas\": escolhe os nichos que cabem na cota do dia e monta uma busca por (nicho, palavra-chave).\n// Entradas: \"Ler config\", \"Ler nichos\", \"Ler ranking\" (para saber quais nichos já foram feitos neste ciclo) e, como entrada deste nó, a aba execucoes (chamadas de hoje).\n// Ciclo = o domingo da semana (no teste manual, \"teste\"). Um nicho nunca é dividido: se as palavras dele não cabem na cota de hoje, ele fica para o dia seguinte.\nconst cfg = {};\n$('Ler config').all().forEach(function (it) {\n  const r = it.json || {};\n  if (r.chave !== undefined && String(r.chave).trim() !== '') cfg[String(r.chave).trim()] = r.valor;\n});\nconst num = function (v, padrao) {\n  if (v === undefined || v === null || String(v).trim() === '') return padrao;\n  const n = Number(String(v).replace(',', '.'));\n  return isFinite(n) ? n : padrao;\n};\nlet modo = 'semanal';\ntry {\n  if ($('Teste manual').isExecuted) modo = 'teste';\n} catch (e) {\n  modo = 'semanal';\n}\nconst agora = new Date();\nconst agoraBr = agora.toLocaleString('sv-SE', { timeZone: 'America/Sao_Paulo' }).slice(0, 16); // AAAA-MM-DD HH:MM (Brasília)\nconst hoje = agoraBr.slice(0, 10);\nconst diaSemana = new Date(hoje + 'T12:00:00Z').getUTCDay(); // 0 = domingo\nconst domingo = new Date(Date.parse(hoje + 'T12:00:00Z') - diaSemana * 86400000).toISOString().slice(0, 10);\nconst ciclo = modo === 'teste' ? 'teste' : domingo;\nconst limite = num(cfg.limite_search_dia, 90);\nlet usadas = 0;\n$input.all().forEach(function (it) {\n  const r = it.json || {};\n  if (String(r.data_execucao || '').slice(0, 10) === hoje) usadas += num(r.chamadas_search_list, 0);\n});\nconst sim = function (v) { return ['sim', 's', 'true', '1', 'x', 'yes'].indexOf(String(v === undefined ? '' : v).trim().toLowerCase()) >= 0; };\nconst avisos = [];\nlet ativos = [];\n$('Ler nichos').all().forEach(function (it) {\n  const r = it.json || {};\n  const nome = String(r.nicho || '').trim();\n  if (!nome || !sim(r.ativo)) return;\n  let kws = String(r.palavras_chave || '').split(/[;,]/).map(function (s) { return s.trim(); }).filter(Boolean);\n  if (kws.length < 1) { avisos.push('nicho \"' + nome + '\" sem palavras-chave; ignorado'); return; }\n  if (kws.length > 5) { avisos.push('nicho \"' + nome + '\" tem ' + kws.length + ' palavras; só as 5 primeiras valem'); kws = kws.slice(0, 5); }\n  ativos.push({ nicho: nome, kws: kws, regionCode: String(r.regionCode || 'BR').trim().toUpperCase(), relevanceLanguage: String(r.relevanceLanguage || 'pt').trim().toLowerCase() });\n});\nconst feitos = {};\n$('Ler ranking').all().forEach(function (it) {\n  const r = it.json || {};\n  if (String(r.ciclo || '') === ciclo && r.nicho) feitos[String(r.nicho)] = true;\n});\nlet pendentes;\nif (modo === 'teste') {\n  const nn = Math.max(1, Math.round(num(cfg.teste_num_nichos, 3)));\n  const pp = Math.max(1, Math.round(num(cfg.teste_palavras_por_nicho, 2)));\n  pendentes = ativos.slice(0, nn).map(function (n) { return Object.assign({}, n, { kws: n.kws.slice(0, pp) }); });\n} else {\n  pendentes = ativos.filter(function (n) { return !feitos[n.nicho]; });\n}\nconst orcamento = Math.max(0, limite - usadas);\nconst escolhidos = [];\nlet gasto = 0;\npendentes.forEach(function (n, i) {\n  if (escolhidos.length !== i) return; // já parou: o resto fica para amanhã\n  let kws = n.kws;\n  if (!escolhidos.length && kws.length > limite) kws = kws.slice(0, Math.max(1, limite));\n  if (gasto + kws.length <= orcamento) {\n    escolhidos.push(Object.assign({}, n, { kws: kws }));\n    gasto += kws.length;\n  }\n});\nconst c = {\n  duracao_max_s: num(cfg.duracao_max_s, 90),\n  inscritos_max: num(cfg.inscritos_max, 50000),\n  views_min: num(cfg.views_min, 5000),\n  janela_dias: num(cfg.janela_dias, 14),\n  resultados_por_busca: Math.max(1, Math.min(50, Math.round(num(cfg.resultados_por_busca, 50)))),\n  filtrar_idioma: String(cfg.filtrar_idioma === undefined ? 'sim' : cfg.filtrar_idioma).trim().toLowerCase() !== 'nao',\n  email_destino: String(cfg.email_destino || ''),\n  top_por_nicho: Math.max(1, Math.round(num(cfg.top_por_nicho_email, 5))),\n};\nconst restantes = pendentes.length - escolhidos.length;\nconst comum = {\n  modo: modo, hoje: hoje, agora_br: agoraBr, ciclo: ciclo, limite_search_dia: limite, chamadas_ja_usadas_hoje: usadas,\n  nichos_ativos: ativos.length, nichos_pendentes_no_inicio: pendentes.length, nichos_restantes_para_amanha: restantes,\n  completo_apos: restantes === 0, avisos: avisos, cfg: c,\n};\nif (!escolhidos.length) {\n  let motivo = 'nada a fazer';\n  if (!ativos.length) motivo = 'nenhum nicho ativo na aba nichos';\n  else if (!pendentes.length) motivo = 'ciclo ' + ciclo + ' já completo (todos os nichos ativos já têm ranking); nada a fazer';\n  else motivo = 'cota de search.list do dia não comporta o próximo nicho (' + usadas + ' de ' + limite + ' chamadas já usadas hoje); continua amanhã';\n  return [{ json: Object.assign({ abortado: true, motivo: motivo }, comum) }];\n}\nconst apos = new Date(agora.getTime() - c.janela_dias * 86400000).toISOString();\nconst saida = [];\nescolhidos.forEach(function (n) {\n  n.kws.forEach(function (q) {\n    saida.push({ json: Object.assign({ abortado: false, nicho: n.nicho, q: q, regionCode: n.regionCode, relevanceLanguage: n.relevanceLanguage, publishedAfter: apos, maxResults: c.resultados_por_busca }, comum) });\n  });\n});\nreturn saida;\n"
+      }
+    },
+    {
+      "id": "9dd35bd5-b2f8-42db-8251-dae8e119d5cb",
+      "name": "Pode buscar?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        896,
+        288
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.abortado ? \"nao\" : \"sim\" }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              },
+              "rightValue": "sim"
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "4a9b87cd-74c3-4899-9ace-e1e26d55b5da",
+      "name": "Buscar shorts (search.list)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1120,
+        192
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://www.googleapis.com/youtube/v3/search",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "youTubeOAuth2Api",
+        "sendQuery": true,
+        "specifyQuery": "keypair",
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "part",
+              "value": "id"
+            },
+            {
+              "name": "type",
+              "value": "video"
+            },
+            {
+              "name": "videoDuration",
+              "value": "short"
+            },
+            {
+              "name": "regionCode",
+              "value": "={{ $json.regionCode }}"
+            },
+            {
+              "name": "relevanceLanguage",
+              "value": "={{ $json.relevanceLanguage }}"
+            },
+            {
+              "name": "order",
+              "value": "viewCount"
+            },
+            {
+              "name": "q",
+              "value": "={{ $json.q }}"
+            },
+            {
+              "name": "publishedAfter",
+              "value": "={{ $json.publishedAfter }}"
+            },
+            {
+              "name": "maxResults",
+              "value": "={{ $json.maxResults }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "youTubeOAuth2Api": {
+          "id": "CONFIGURAR",
+          "name": "YouTube account"
+        }
+      }
+    },
+    {
+      "id": "711cfb21-949d-48e0-8fb2-f5053fc50bc0",
+      "name": "Consolidar buscas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        192
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Radar do YouTube (multi-nicho) - nó \"Consolidar buscas\": junta as respostas do search.list POR NICHO, tira duplicados dentro do nicho (guardando todas as palavras que\n// acharam o vídeo) e monta lotes de até 50 ids ÚNICOS (de todos os nichos) para o videos.list. Erros 403 (cota, escopo) viram texto em meta.erros; nada aqui lança erro.\nconst buscas = $('Montar buscas').all();\nconst respostas = $input.all();\nconst porNicho = {};\nconst erros = [];\nlet chamadas = 0;\nlet quotaExcedida = false;\nlet erroEscopo = false;\nrespostas.forEach(function (it, i) {\n  chamadas += 1;\n  const b = buscas[i] && buscas[i].json ? buscas[i].json : { nicho: '?', q: '?' };\n  if (!porNicho[b.nicho]) porNicho[b.nicho] = { chamadas: 0, palavras: [], ids: {} };\n  const grupo = porNicho[b.nicho];\n  grupo.chamadas += 1;\n  if (grupo.palavras.indexOf(b.q) < 0) grupo.palavras.push(b.q);\n  const r = it.json || {};\n  const corpo = r.body && typeof r.body === 'object' ? r.body : r;\n  const status = Number(r.statusCode || 200);\n  if (status >= 400 || corpo.error) {\n    const e = corpo.error || {};\n    const bruto = JSON.stringify(e);\n    const razao = e.errors && e.errors[0] ? String(e.errors[0].reason || '') : '';\n    if (razao === 'quotaExceeded' || razao === 'dailyLimitExceeded' || razao === 'rateLimitExceeded') quotaExcedida = true;\n    if (status === 403 && (bruto.indexOf('SCOPE_INSUFFICIENT') >= 0 || bruto.indexOf('insufficientPermissions') >= 0 || bruto.indexOf('insufficient authentication scopes') >= 0)) erroEscopo = true;\n    erros.push('search [' + b.nicho + '] \"' + b.q + '\": HTTP ' + status + ' ' + razao + ' ' + String(e.message || '').slice(0, 140));\n    return;\n  }\n  (corpo.items || []).forEach(function (v) {\n    const id = v.id && v.id.videoId;\n    if (!id) return;\n    if (!grupo.ids[id]) grupo.ids[id] = [];\n    if (grupo.ids[id].indexOf(b.q) < 0) grupo.ids[id].push(b.q);\n  });\n});\nconst unicos = {};\nlet duplicados = 0;\nObject.keys(porNicho).forEach(function (n) {\n  Object.keys(porNicho[n].ids).forEach(function (id) {\n    unicos[id] = true;\n    if (porNicho[n].ids[id].length > 1) duplicados += 1;\n  });\n});\nconst ids = Object.keys(unicos);\nconst meta = { erros: erros, chamadas_search: chamadas, quota_excedida: quotaExcedida, erro_escopo: erroEscopo, total_ids_unicos: ids.length, duplicados: duplicados, por_nicho: porNicho };\nconst lotes = [];\nfor (let i = 0; i < ids.length; i += 50) lotes.push(ids.slice(i, i + 50));\nif (!lotes.length) lotes.push(['nenhum']); // videos.list com id inexistente devolve lista vazia (1 unidade) e mantém o fluxo vivo\nreturn lotes.map(function (l, k) {\n  const j = { ids: l.join(','), lote: k + 1, vazio: ids.length === 0 };\n  if (k === 0) j.meta = meta;\n  return { json: j };\n});\n"
+      }
+    },
+    {
+      "id": "878ead3f-fe48-4260-ac40-066a5ce84f39",
+      "name": "Detalhar videos (videos.list)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1568,
+        192
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://www.googleapis.com/youtube/v3/videos",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "youTubeOAuth2Api",
+        "sendQuery": true,
+        "specifyQuery": "keypair",
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "part",
+              "value": "snippet,statistics,contentDetails"
+            },
+            {
+              "name": "id",
+              "value": "={{ $json.ids }}"
+            },
+            {
+              "name": "maxResults",
+              "value": "50"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "youTubeOAuth2Api": {
+          "id": "CONFIGURAR",
+          "name": "YouTube account"
+        }
+      }
+    },
+    {
+      "id": "d2e23382-b0a4-45fe-93be-fc27912d5025",
+      "name": "Consolidar videos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1792,
+        192
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Radar do YouTube (multi-nicho) - nó \"Consolidar videos\": lê o videos.list, trata vídeo sem estatísticas, converte a duração ISO 8601 e aplica o filtro de duração.\n// Guarda o idioma declarado e um palpite pelo título (o filtro de idioma é aplicado por nicho no nó seguinte). Monta lotes de até 50 canais para o channels.list.\nconst cfg = $('Montar buscas').first().json.cfg;\nconst videos = {};\nconst erros = [];\nlet detalhados = 0;\nlet semEstatisticas = 0;\nlet longos = 0;\nconst MARCAS_PT = [' você ', ' voce ', ' não ', ' nao ', ' uma ', ' seu ', ' sua ', ' com ', ' para ', ' pra ', ' quando ', ' amor ', ' dele ', ' dela ', ' como ', ' mais ', ' isso ', ' ele ', ' ela ', ' ção', 'ções', 'ão ', 'ões '];\nconst MARCAS_OUTRO = [' the ', ' you ', ' your ', ' and ', ' of ', ' he ', ' she ', ' his ', ' her ', ' how ', ' why ', ' with ', ' when ', ' el ', ' los ', ' las ', ' una ', ' tu ', ' es ', ' pero ', ' le ', ' est ', ' pas ', ' und ', ' der ', ' nicht '];\nconst achaPt = function (titulo) {\n  const t = ' ' + String(titulo || '').toLowerCase().replace(/[#!?.,:;()|\"]/g, ' ').replace(/ +/g, ' ') + ' ';\n  let a = 0;\n  let b = 0;\n  MARCAS_PT.forEach(function (m) { if (t.indexOf(m) >= 0) a += 1; });\n  MARCAS_OUTRO.forEach(function (m) { if (t.indexOf(m) >= 0) b += 1; });\n  return a > b;\n};\nconst duracaoSeg = function (d) {\n  const m = /^P(?:([0-9]+)D)?T?(?:([0-9]+)H)?(?:([0-9]+)M)?(?:([0-9]+)S)?$/.exec(String(d || ''));\n  if (!m) return null;\n  return Number(m[1] || 0) * 86400 + Number(m[2] || 0) * 3600 + Number(m[3] || 0) * 60 + Number(m[4] || 0);\n};\n$input.all().forEach(function (it, i) {\n  const r = it.json || {};\n  const corpo = r.body && typeof r.body === 'object' ? r.body : r;\n  const status = Number(r.statusCode || 200);\n  if (status >= 400 || corpo.error) {\n    const e = corpo.error || {};\n    const razao = e.errors && e.errors[0] ? String(e.errors[0].reason || '') : '';\n    erros.push('videos.list lote ' + (i + 1) + ': HTTP ' + status + ' ' + razao + ' ' + String(e.message || '').slice(0, 140));\n    return;\n  }\n  (corpo.items || []).forEach(function (v) {\n    detalhados += 1;\n    const est = v.statistics || {};\n    if (est.viewCount === undefined) {\n      semEstatisticas += 1;\n      return;\n    }\n    const dur = duracaoSeg(v.contentDetails && v.contentDetails.duration);\n    if (dur === null || dur > cfg.duracao_max_s) {\n      longos += 1;\n      return;\n    }\n    const s = v.snippet || {};\n    videos[v.id] = {\n      id: v.id,\n      titulo: String(s.title || ''),\n      canal_id: s.channelId,\n      canal: String(s.channelTitle || ''),\n      publicado: s.publishedAt,\n      views: Number(est.viewCount),\n      curtidas: est.likeCount === undefined ? null : Number(est.likeCount),\n      comentarios: est.commentCount === undefined ? null : Number(est.commentCount),\n      duracao_s: dur,\n      declarado: String(s.defaultAudioLanguage || s.defaultLanguage || '').toLowerCase(),\n      titulo_pt: achaPt(s.title) || achaPt(s.channelTitle),\n    };\n  });\n});\nconst canais = [];\nObject.keys(videos).forEach(function (id) {\n  if (canais.indexOf(videos[id].canal_id) < 0) canais.push(videos[id].canal_id);\n});\nconst lotes = [];\nfor (let i = 0; i < canais.length; i += 50) lotes.push(canais.slice(i, i + 50));\nif (!lotes.length) lotes.push(['nenhum']);\nreturn lotes.map(function (l, k) {\n  const j = { ids: l.join(','), lote: k + 1 };\n  if (k === 0) j.dados = { videos: videos, erros: erros, detalhados: detalhados, sem_estatisticas: semEstatisticas, acima_da_duracao: longos, lotes_videos: $input.all().length };\n  return { json: j };\n});\n"
+      }
+    },
+    {
+      "id": "726ff83e-3b19-4321-b69f-5ea12fe05156",
+      "name": "Detalhar canais (channels.list)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2016,
+        192
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://www.googleapis.com/youtube/v3/channels",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "youTubeOAuth2Api",
+        "sendQuery": true,
+        "specifyQuery": "keypair",
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "part",
+              "value": "snippet,statistics"
+            },
+            {
+              "name": "id",
+              "value": "={{ $json.ids }}"
+            },
+            {
+              "name": "maxResults",
+              "value": "50"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "youTubeOAuth2Api": {
+          "id": "CONFIGURAR",
+          "name": "YouTube account"
+        }
+      }
+    },
+    {
+      "id": "5fc723d4-053d-4434-afa6-e58895c65e5e",
+      "name": "Pontuar e filtrar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        192
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Radar do YouTube (multi-nicho) - nó \"Pontuar e filtrar\": para CADA nicho junta canais e vídeos, aplica idioma, inscritos e views, calcula outlier, velocidade, engajamento,\n// padrão do título e idade do canal, e monta a linha do ranking do nicho. Devolve UM item com as linhas, o ranking, o resumo e a linha da aba execucoes.\nconst base = $('Montar buscas').first().json;\nconst cfg = base.cfg;\nconst meta = $('Consolidar buscas').first().json.meta;\nconst dados = $('Consolidar videos').first().json.dados;\nconst videos = dados.videos;\nconst erros = [].concat(meta.erros, dados.erros, base.avisos || []);\nconst idiomaDoNicho = {};\n$('Montar buscas').all().forEach(function (i) { idiomaDoNicho[i.json.nicho] = i.json.relevanceLanguage; });\nconst canais = {};\n$input.all().forEach(function (it, i) {\n  const r = it.json || {};\n  const corpo = r.body && typeof r.body === 'object' ? r.body : r;\n  const status = Number(r.statusCode || 200);\n  if (status >= 400 || corpo.error) {\n    const e = corpo.error || {};\n    const razao = e.errors && e.errors[0] ? String(e.errors[0].reason || '') : '';\n    erros.push('channels.list lote ' + (i + 1) + ': HTTP ' + status + ' ' + razao + ' ' + String(e.message || '').slice(0, 140));\n    return;\n  }\n  (corpo.items || []).forEach(function (c) {\n    const est = c.statistics || {};\n    canais[c.id] = {\n      titulo: String((c.snippet || {}).title || ''),\n      criado: (c.snippet || {}).publishedAt,\n      oculto: est.hiddenSubscriberCount === true || est.subscriberCount === undefined,\n      inscritos: est.subscriberCount === undefined ? null : Number(est.subscriberCount),\n    };\n  });\n});\nconst TERMOS = ['gaslighting', 'love bombing', 'narcisis', 'narcisismo', 'manipula', 'darvo', 'triangula', 'hoovering', 'flying monkey', 'abus', 'toxic', 'psicopata', 'sociopata', 'codependen', 'dissonancia', 'apego', 'creepypasta', 'serial killer', 'buraco negro', 'estoicismo', 'mitologia'];\nconst padraoTitulo = function (t) {\n  const limpo = String(t || '').replace(/#[^ ]+/g, ' ').replace(/ +/g, ' ').trim();\n  if (/^(top )?[0-9]+/i.test(limpo)) return 'numero_no_inicio';\n  if (/[\"“”«»]/.test(limpo)) return 'aspas';\n  if (limpo.indexOf('?') >= 0) return 'pergunta';\n  const baixo = limpo.toLowerCase();\n  const palavras = limpo.split(' ').filter(Boolean).length;\n  if (palavras <= 4 && TERMOS.some(function (x) { return baixo.indexOf(x) >= 0; })) return 'termo_tecnico_isolado';\n  return 'outro';\n};\nconst arred = function (n, d) { const f = Math.pow(10, d); return Math.round(n * f) / f; };\nconst mediana = function (a) {\n  if (!a.length) return 0;\n  const s = a.slice().sort(function (x, y) { return x - y; });\n  const m = Math.floor(s.length / 2);\n  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;\n};\nconst agoraMs = Date.now();\nconst linhas = [];\nconst ranking = [];\nconst funil = [];\nObject.keys(meta.por_nicho).forEach(function (nicho) {\n  const g = meta.por_nicho[nicho];\n  const lang = idiomaDoNicho[nicho] || 'pt';\n  const f = { achados: Object.keys(g.ids).length, detalhados_ok: 0, outro_idioma: 0, sem_canal: 0, canal_oculto: 0, acima_de_inscritos: 0, abaixo_de_views: 0 };\n  const doNicho = [];\n  Object.keys(g.ids).forEach(function (id) {\n    const v = videos[id];\n    if (!v) return; // fora da duração, sem estatísticas ou erro no videos.list (contados em dados)\n    f.detalhados_ok += 1;\n    let idioma = v.declarado ? v.declarado : '?';\n    if (cfg.filtrar_idioma) {\n      if (v.declarado) {\n        if (v.declarado.indexOf(lang) !== 0) { f.outro_idioma += 1; return; }\n      } else if (lang === 'pt' && v.titulo_pt) {\n        idioma = 'pt (titulo)';\n      } else { f.outro_idioma += 1; return; }\n    }\n    const canal = canais[v.canal_id];\n    if (!canal) { f.sem_canal += 1; return; }\n    if (canal.oculto) { f.canal_oculto += 1; return; }\n    if (canal.inscritos > cfg.inscritos_max) { f.acima_de_inscritos += 1; return; }\n    if (v.views < cfg.views_min) { f.abaixo_de_views += 1; return; }\n    const horas = Math.max(1, (agoraMs - Date.parse(v.publicado)) / 3600000);\n    const idade = canal.criado ? (agoraMs - Date.parse(canal.criado)) / (30.4375 * 86400000) : null;\n    const palavras = g.ids[id] || [];\n    doNicho.push({\n      chave: base.ciclo + '|' + nicho + '|' + id,\n      ciclo: base.ciclo,\n      nicho: nicho,\n      data_execucao: base.agora_br,\n      palavra_chave: palavras[0] || '',\n      titulo: v.titulo,\n      link: 'https://www.youtube.com/shorts/' + id,\n      canal: canal.titulo || v.canal,\n      link_canal: 'https://www.youtube.com/channel/' + v.canal_id,\n      canal_id: v.canal_id,\n      inscritos: canal.inscritos,\n      views: v.views,\n      curtidas: v.curtidas === null ? '' : v.curtidas,\n      comentarios: v.comentarios === null ? '' : v.comentarios,\n      duracao_s: v.duracao_s,\n      publicado_em: v.publicado,\n      outlier: arred(v.views / Math.max(canal.inscritos, 500), 2),\n      velocidade_views_h: arred(v.views / horas, 1),\n      engajamento: arred(((v.curtidas || 0) + (v.comentarios || 0)) / Math.max(v.views, 1), 4),\n      padrao_titulo: padraoTitulo(v.titulo),\n      canal_novo: idade !== null && idade < 6 ? 'sim' : 'nao',\n      idade_canal_meses: idade === null ? '' : arred(idade, 1),\n      palavras_que_acharam: palavras.join(' | '),\n      idioma: idioma,\n    });\n  });\n  doNicho.sort(function (a, b) { return b.outlier - a.outlier; });\n  const porCanal = {};\n  let totalViews = 0;\n  doNicho.forEach(function (l) {\n    porCanal[l.canal_id] = (porCanal[l.canal_id] || 0) + l.views;\n    totalViews += l.views;\n  });\n  const idsCanais = Object.keys(porCanal);\n  const maior = idsCanais.reduce(function (m, k) { return Math.max(m, porCanal[k]); }, 0);\n  const conc = totalViews > 0 ? maior / totalViews : 0;\n  const med = mediana(doNicho.map(function (l) { return l.outlier; }));\n  ranking.push({\n    chave: base.ciclo + '|' + nicho,\n    ciclo: base.ciclo,\n    data_execucao: base.agora_br,\n    nicho: nicho,\n    palavras_usadas: g.palavras.join('; '),\n    chamadas_search: g.chamadas,\n    videos_achados: f.achados,\n    videos_outlier: doNicho.length,\n    canais_pequenos: idsCanais.length,\n    mediana_outlier: arred(med, 2),\n    concentracao_top_canal: arred(conc, 3),\n    duracao_mediana_s: arred(mediana(doNicho.map(function (l) { return l.duracao_s; })), 1),\n    score: arred(idsCanais.length * med * (1 - conc), 2),\n    outlier_maximo: doNicho.length ? doNicho[0].outlier : 0,\n  });\n  funil.push(Object.assign({ nicho: nicho, saida: doNicho.length }, f));\n  doNicho.forEach(function (l) { linhas.push(l); });\n});\nranking.sort(function (a, b) { return b.score - a.score; });\nconst unidades = meta.chamadas_search * 100 + dados.lotes_videos + $input.all().length;\nif (meta.erro_escopo) erros.push('ESCOPO: a credencial OAuth do YouTube não tem permissão para search.list/videos.list; é preciso uma chave de API do YouTube Data API v3 (ver a seção Autenticação do README)');\nif (meta.quota_excedida) erros.push('COTA: a API respondeu quotaExceeded; o relatório pode estar incompleto');\nconst nichosFeitos = ranking.map(function (r) { return r.nicho; });\nconst obs = funil.map(function (x) { return x.nicho + ': ' + x.achados + ' achados > ' + x.detalhados_ok + ' ok > idioma -' + x.outro_idioma + ' > inscritos -' + x.acima_de_inscritos + ' > views -' + x.abaixo_de_views + ' = ' + x.saida; }).join(' | ') + ' || fora da duração ' + dados.acima_da_duracao + '; sem estatísticas ' + dados.sem_estatisticas + '; duplicados no nicho ' + meta.duplicados + '; ids únicos ' + meta.total_ids_unicos + '; restam para amanhã ' + base.nichos_restantes_para_amanha + ' nicho(s)';\nconst resumo = { chamadas_search: meta.chamadas_search, unidades_cota: unidades, ids_unicos: meta.total_ids_unicos, duplicados_no_nicho: meta.duplicados, videos_detalhados: dados.detalhados, sem_estatisticas: dados.sem_estatisticas, acima_da_duracao: dados.acima_da_duracao, funil: funil, restam_para_amanha: base.nichos_restantes_para_amanha };\nreturn [{\n  json: {\n    linhas: linhas,\n    ranking: ranking,\n    resumo: resumo,\n    erros: erros,\n    cfg: cfg,\n    modo: base.modo,\n    hoje: base.hoje,\n    agora_br: base.agora_br,\n    ciclo: base.ciclo,\n    enviar_email: base.modo === 'teste' ? true : base.completo_apos === true,\n    execucao: {\n      data_execucao: base.agora_br,\n      modo: base.modo,\n      palavras_usadas: nichosFeitos.join('; '),\n      chamadas_search_list: meta.chamadas_search,\n      unidades_cota_estimadas: unidades,\n      videos_encontrados: meta.total_ids_unicos,\n      videos_apos_filtros: linhas.length,\n      linhas_gravadas: linhas.length,\n      erros: erros.join(' || ').slice(0, 900),\n      observacoes: obs.slice(0, 1800),\n    },\n  },\n}];\n"
+      }
+    },
+    {
+      "id": "45075f21-74ec-47f8-9b4d-adb29c8f88cb",
+      "name": "Execucao abortada",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        432
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Radar do YouTube (multi-nicho) - nó \"Execucao abortada\": monta a linha da aba execucoes quando não há o que fazer hoje\n// (ciclo já completo, nenhum nicho ativo ou cota do dia sem espaço para o próximo nicho).\nconst d = $input.first().json;\nreturn [{\n  json: {\n    execucao: {\n      data_execucao: d.agora_br,\n      modo: d.modo,\n      palavras_usadas: '',\n      chamadas_search_list: 0,\n      unidades_cota_estimadas: 0,\n      videos_encontrados: 0,\n      videos_apos_filtros: 0,\n      linhas_gravadas: 0,\n      erros: '',\n      observacoes: 'SEM BUSCA: ' + d.motivo + ' | ciclo ' + d.ciclo + '; limite ' + d.limite_search_dia + ' chamadas/dia; já usadas hoje ' + d.chamadas_ja_usadas_hoje + '; nichos ativos ' + d.nichos_ativos,\n    },\n  },\n}];\n"
+      }
+    },
+    {
+      "id": "d459694c-78cb-4132-b18b-8774982568bd",
+      "name": "Registrar execucao",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        2464,
+        384
+      ],
+      "parameters": {
+        "resource": "sheet",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "SEU_ID_DA_PLANILHA"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "execucoes"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "data_execucao": "={{ $json.execucao.data_execucao }}",
+            "modo": "={{ $json.execucao.modo }}",
+            "palavras_usadas": "={{ $json.execucao.palavras_usadas }}",
+            "chamadas_search_list": "={{ $json.execucao.chamadas_search_list }}",
+            "unidades_cota_estimadas": "={{ $json.execucao.unidades_cota_estimadas }}",
+            "videos_encontrados": "={{ $json.execucao.videos_encontrados }}",
+            "videos_apos_filtros": "={{ $json.execucao.videos_apos_filtros }}",
+            "linhas_gravadas": "={{ $json.execucao.linhas_gravadas }}",
+            "erros": "={{ $json.execucao.erros }}",
+            "observacoes": "={{ $json.execucao.observacoes }}"
+          },
+          "schema": [
+            {
+              "id": "data_execucao",
+              "displayName": "data_execucao",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "modo",
+              "displayName": "modo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "palavras_usadas",
+              "displayName": "palavras_usadas",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "chamadas_search_list",
+              "displayName": "chamadas_search_list",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "unidades_cota_estimadas",
+              "displayName": "unidades_cota_estimadas",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "videos_encontrados",
+              "displayName": "videos_encontrados",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "videos_apos_filtros",
+              "displayName": "videos_apos_filtros",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "linhas_gravadas",
+              "displayName": "linhas_gravadas",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "erros",
+              "displayName": "erros",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "observacoes",
+              "displayName": "observacoes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "CONFIGURAR",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "4fed2e2b-4c70-4e95-8444-b54461d02f4a",
+      "name": "Dividir linhas",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1.1,
+      "position": [
+        2464,
+        0
+      ],
+      "parameters": {
+        "fieldToSplitOut": "linhas",
+        "include": "noOtherFields"
+      }
+    },
+    {
+      "id": "bf82724a-e879-4f50-874d-0af9bb1c0b2e",
+      "name": "Gravar resultados",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        2688,
+        0
+      ],
+      "parameters": {
+        "resource": "sheet",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "SEU_ID_DA_PLANILHA"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "resultados"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "chave"
+          ],
+          "schema": [
+            {
+              "id": "chave",
+              "displayName": "chave",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "data_execucao",
+              "displayName": "data_execucao",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "palavra_chave",
+              "displayName": "palavra_chave",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "titulo",
+              "displayName": "titulo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "link",
+              "displayName": "link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "canal",
+              "displayName": "canal",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "link_canal",
+              "displayName": "link_canal",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "inscritos",
+              "displayName": "inscritos",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "views",
+              "displayName": "views",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "curtidas",
+              "displayName": "curtidas",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "comentarios",
+              "displayName": "comentarios",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "duracao_s",
+              "displayName": "duracao_s",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "publicado_em",
+              "displayName": "publicado_em",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "outlier",
+              "displayName": "outlier",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "velocidade_views_h",
+              "displayName": "velocidade_views_h",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "engajamento",
+              "displayName": "engajamento",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "padrao_titulo",
+              "displayName": "padrao_titulo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "canal_novo",
+              "displayName": "canal_novo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "idade_canal_meses",
+              "displayName": "idade_canal_meses",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "palavras_que_acharam",
+              "displayName": "palavras_que_acharam",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "idioma",
+              "displayName": "idioma",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "ciclo",
+              "displayName": "ciclo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "nicho",
+              "displayName": "nicho",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "RAW",
+          "handlingExtraData": "ignoreIt"
+        }
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "CONFIGURAR",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "6e94ddbf-d0f7-4f07-99a6-c5ea45ec5fd0",
+      "name": "Montar e-mail",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2464,
+        192
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Radar do YouTube (multi-nicho) - nó \"Montar e-mail\": ranking dos nichos (aba ranking_nichos do ciclo) + top N outliers de cada nicho + cota e funil.\n// Teste manual: usa só os dados desta execução. Semanal: usa o que está na planilha para o ciclo (que junta os dias em que o ciclo foi sendo completado).\nconst p = $('Pontuar e filtrar').first().json;\nconst esc = function (s) {\n  return String(s === undefined || s === null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;');\n};\nconst n = function (v) { return Number(v).toLocaleString('pt-BR'); };\nconst d1 = function (v) { return (Math.round(Number(v) * 100) / 100).toLocaleString('pt-BR'); };\nlet ranking = p.ranking;\nlet linhas = p.linhas;\nif (p.modo !== 'teste') {\n  ranking = $('Ler ranking do ciclo').all().map(function (i) { return i.json; }).filter(function (r) { return String(r.ciclo || '') === p.ciclo && r.nicho; });\n  linhas = $('Ler resultados do ciclo').all().map(function (i) { return i.json; }).filter(function (r) { return String(r.ciclo || '') === p.ciclo && r.nicho; });\n  ranking.forEach(function (r) { r.score = Number(r.score); });\n  linhas.forEach(function (l) { l.outlier = Number(l.outlier); });\n}\nranking = ranking.slice().sort(function (a, b) { return Number(b.score) - Number(a.score); });\nconst partes = [];\npartes.push('<div style=\"font-family:Arial,Helvetica,sans-serif;color:#222;max-width:960px\">');\npartes.push('<h2 style=\"margin:0 0 6px\">Radar multi-nicho</h2>');\npartes.push('<p style=\"margin:0 0 12px;color:#555\">' + esc(p.agora_br) + ' (Brasília) · ciclo ' + esc(p.ciclo) + ' · modo ' + esc(p.modo) + ' · ' + ranking.length + ' nicho(s) no ranking</p>');\nif (p.erros.length) {\n  partes.push('<p style=\"background:#fdecea;border-left:4px solid #c0392b;padding:8px 12px\"><b>Avisos e erros:</b><br>' + p.erros.map(esc).join('<br>') + '</p>');\n}\npartes.push('<h3 style=\"margin:12px 0 4px\">Ranking dos nichos</h3>');\npartes.push('<p style=\"margin:0 0 6px;color:#666;font-size:12px\">Pontuação = canais pequenos distintos × mediana do outlier × (1 − parcela de views do maior canal). Sobe quando há muitos canais pequenos se saindo bem, sem depender de um só.</p>');\npartes.push('<table style=\"border-collapse:collapse;width:100%;font-size:13px\">');\npartes.push('<tr style=\"background:#2b1d24;color:#fff;text-align:left\"><th style=\"padding:6px\">#</th><th style=\"padding:6px\">Nicho</th><th style=\"padding:6px;text-align:right\">Vídeos outlier</th><th style=\"padding:6px;text-align:right\">Canais pequenos</th><th style=\"padding:6px;text-align:right\">Mediana outlier</th><th style=\"padding:6px;text-align:right\">Maior canal (views)</th><th style=\"padding:6px;text-align:right\">Duração mediana</th><th style=\"padding:6px;text-align:right\">Pontuação</th></tr>');\nranking.forEach(function (r, i) {\n  const fundo = i % 2 ? '#f6f1f3' : '#ffffff';\n  partes.push('<tr style=\"background:' + fundo + '\"><td style=\"padding:6px\">' + (i + 1) + '</td><td style=\"padding:6px\"><b>' + esc(r.nicho) + '</b></td><td style=\"padding:6px;text-align:right\">' + n(r.videos_outlier) + '</td><td style=\"padding:6px;text-align:right\">' + n(r.canais_pequenos) + '</td><td style=\"padding:6px;text-align:right\">' + d1(r.mediana_outlier) + '×</td><td style=\"padding:6px;text-align:right\">' + Math.round(Number(r.concentracao_top_canal) * 100) + '%</td><td style=\"padding:6px;text-align:right\">' + d1(r.duracao_mediana_s) + ' s</td><td style=\"padding:6px;text-align:right\"><b>' + d1(r.score) + '</b></td></tr>');\n});\npartes.push('</table>');\nranking.forEach(function (r) {\n  const top = linhas.filter(function (l) { return l.nicho === r.nicho; }).sort(function (a, b) { return Number(b.outlier) - Number(a.outlier); }).slice(0, p.cfg.top_por_nicho);\n  partes.push('<h3 style=\"margin:18px 0 4px\">' + esc(r.nicho) + '</h3>');\n  if (!top.length) {\n    partes.push('<p style=\"margin:0;color:#777\">Nenhum vídeo passou nos filtros neste nicho (duração ≤ ' + p.cfg.duracao_max_s + ' s, canal ≤ ' + n(p.cfg.inscritos_max) + ' inscritos, ≥ ' + n(p.cfg.views_min) + ' views, últimos ' + p.cfg.janela_dias + ' dias).</p>');\n    return;\n  }\n  partes.push('<table style=\"border-collapse:collapse;width:100%;font-size:13px\">');\n  top.forEach(function (l, i) {\n    const fundo = i % 2 ? '#f6f1f3' : '#ffffff';\n    partes.push('<tr style=\"background:' + fundo + '\"><td style=\"padding:5px\">' + (i + 1) + '</td><td style=\"padding:5px\"><a href=\"' + esc(l.link) + '\">' + esc(l.titulo) + '</a>' + (l.canal_novo === 'sim' ? ' <span style=\"color:#b5651d\">(canal novo)</span>' : '') + '</td><td style=\"padding:5px\"><a href=\"' + esc(l.link_canal) + '\">' + esc(l.canal) + '</a></td><td style=\"padding:5px;text-align:right\">' + n(l.inscritos) + ' insc.</td><td style=\"padding:5px;text-align:right\">' + n(l.views) + ' views</td><td style=\"padding:5px;text-align:right\"><b>' + d1(l.outlier) + '×</b></td><td style=\"padding:5px\">' + esc(l.padrao_titulo) + '</td></tr>');\n  });\n  partes.push('</table>');\n});\nconst r = p.resumo;\npartes.push('<h3 style=\"margin:18px 0 4px\">Cota desta execução</h3>');\npartes.push('<p style=\"margin:0;color:#444\">search.list: ' + r.chamadas_search + ' chamada(s) (' + (r.chamadas_search * 100) + ' unidades) · total estimado: ' + n(r.unidades_cota) + ' de 10.000 unidades/dia (compartilhadas com qualquer outro uso do mesmo projeto do Google) · ids únicos ' + r.ids_unicos + ' · fora da duração ' + r.acima_da_duracao + ' · restam para os próximos dias: ' + r.restam_para_amanha + ' nicho(s)</p>');\npartes.push('<p style=\"color:#888;font-size:12px;margin-top:16px\">Sinal de tema e padrão, não de cópia: o conteúdo do canal continua original. Planilha do radar: abas resultados e ranking_nichos.</p>');\npartes.push('</div>');\nconst assunto = (p.modo === 'teste' ? '[TESTE] ' : '') + 'Radar multi-nicho: ' + ranking.length + ' nichos (ciclo ' + p.ciclo + ')';\nreturn [{ json: { para: p.cfg.email_destino, assunto: assunto, html: partes.join('') } }];\n"
+      }
+    },
+    {
+      "id": "0c0b9a4a-ce41-4a37-bd13-c6278de72be9",
+      "name": "Enviar e-mail",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        2688,
+        192
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $json.para }}",
+        "subject": "={{ $json.assunto }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "CONFIGURAR",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "id": "e78aeda4-5c33-460d-be0c-7c1497b4cabf",
+      "name": "Ler nichos",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        448,
+        192
+      ],
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "SEU_ID_DA_PLANILHA"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "nichos"
+        }
+      },
+      "executeOnce": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "CONFIGURAR",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "38a1612f-6bee-4ef7-8da0-53a853e76610",
+      "name": "Ler ranking",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        672,
+        192
+      ],
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "SEU_ID_DA_PLANILHA"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "ranking_nichos"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "CONFIGURAR",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "a8f83a56-24ec-4582-b88a-ed68d4441343",
+      "name": "Tem linhas?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2464,
+        96
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.linhas.length > 0 ? \"sim\" : \"nao\" }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              },
+              "rightValue": "sim"
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "c308da0b-7ced-463c-9d08-195c93967187",
+      "name": "Linhas do ranking",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2912,
+        96
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Radar do YouTube (multi-nicho) - nó \"Linhas do ranking\": depois de gravar os vídeos, devolve uma linha por nicho processado (aba ranking_nichos).\nreturn $('Pontuar e filtrar').first().json.ranking.map(function (r) { return { json: r }; });\n"
+      }
+    },
+    {
+      "id": "d5d5b8bc-a6d6-4130-a89a-479ca00f89f9",
+      "name": "Gravar ranking",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        3136,
+        96
+      ],
+      "parameters": {
+        "resource": "sheet",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "SEU_ID_DA_PLANILHA"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "ranking_nichos"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "chave"
+          ],
+          "schema": [
+            {
+              "id": "chave",
+              "displayName": "chave",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ciclo",
+              "displayName": "ciclo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "data_execucao",
+              "displayName": "data_execucao",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "nicho",
+              "displayName": "nicho",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "palavras_usadas",
+              "displayName": "palavras_usadas",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "chamadas_search",
+              "displayName": "chamadas_search",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "videos_achados",
+              "displayName": "videos_achados",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "videos_outlier",
+              "displayName": "videos_outlier",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "canais_pequenos",
+              "displayName": "canais_pequenos",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "mediana_outlier",
+              "displayName": "mediana_outlier",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "concentracao_top_canal",
+              "displayName": "concentracao_top_canal",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "duracao_mediana_s",
+              "displayName": "duracao_mediana_s",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "score",
+              "displayName": "score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "outlier_maximo",
+              "displayName": "outlier_maximo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "RAW",
+          "handlingExtraData": "ignoreIt"
+        }
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "CONFIGURAR",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "16324c4a-cadf-4c38-8067-acee23b95e6b",
+      "name": "Ler ranking do ciclo",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        3360,
+        96
+      ],
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "SEU_ID_DA_PLANILHA"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "ranking_nichos"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "CONFIGURAR",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "c48ce8d0-361b-4c69-a4e8-68000dd0e815",
+      "name": "Ler resultados do ciclo",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        3584,
+        96
+      ],
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "SEU_ID_DA_PLANILHA"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "resultados"
+        }
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "CONFIGURAR",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "e04636c6-69eb-47ca-9fe7-46dea6c5d757",
+      "name": "Tem e-mail?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3808,
+        96
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $(\"Pontuar e filtrar\").first().json.enviar_email ? \"sim\" : \"nao\" }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              },
+              "rightValue": "sim"
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "executeOnce": true
+    }
+  ],
+  "connections": {
+    "Teste manual": {
+      "main": [
+        [
+          {
+            "node": "Ler config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler execucoes": {
+      "main": [
+        [
+          {
+            "node": "Montar buscas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar buscas": {
+      "main": [
+        [
+          {
+            "node": "Pode buscar?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pode buscar?": {
+      "main": [
+        [
+          {
+            "node": "Buscar shorts (search.list)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Execucao abortada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar shorts (search.list)": {
+      "main": [
+        [
+          {
+            "node": "Consolidar buscas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consolidar buscas": {
+      "main": [
+        [
+          {
+            "node": "Detalhar videos (videos.list)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detalhar videos (videos.list)": {
+      "main": [
+        [
+          {
+            "node": "Consolidar videos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consolidar videos": {
+      "main": [
+        [
+          {
+            "node": "Detalhar canais (channels.list)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detalhar canais (channels.list)": {
+      "main": [
+        [
+          {
+            "node": "Pontuar e filtrar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pontuar e filtrar": {
+      "main": [
+        [
+          {
+            "node": "Registrar execucao",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Tem linhas?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execucao abortada": {
+      "main": [
+        [
+          {
+            "node": "Registrar execucao",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dividir linhas": {
+      "main": [
+        [
+          {
+            "node": "Gravar resultados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar e-mail": {
+      "main": [
+        [
+          {
+            "node": "Enviar e-mail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Todo dia 04:00": {
+      "main": [
+        [
+          {
+            "node": "Ler config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler config": {
+      "main": [
+        [
+          {
+            "node": "Ler nichos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler nichos": {
+      "main": [
+        [
+          {
+            "node": "Ler ranking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler ranking": {
+      "main": [
+        [
+          {
+            "node": "Ler execucoes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tem linhas?": {
+      "main": [
+        [
+          {
+            "node": "Dividir linhas",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Linhas do ranking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gravar resultados": {
+      "main": [
+        [
+          {
+            "node": "Linhas do ranking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Linhas do ranking": {
+      "main": [
+        [
+          {
+            "node": "Gravar ranking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gravar ranking": {
+      "main": [
+        [
+          {
+            "node": "Ler ranking do ciclo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler ranking do ciclo": {
+      "main": [
+        [
+          {
+            "node": "Ler resultados do ciclo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler resultados do ciclo": {
+      "main": [
+        [
+          {
+            "node": "Tem e-mail?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tem e-mail?": {
+      "main": [
+        [
+          {
+            "node": "Montar e-mail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true,
+    "timezone": "America/Sao_Paulo"
+  },
+  "active": false
+}

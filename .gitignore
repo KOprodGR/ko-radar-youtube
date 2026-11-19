@@ -1,0 +1,18 @@
+# Segredos: nunca versionar
+.env
+*.env
+segredos*
+credentials*.json
+*.pem
+*.key
+
+# Sistema e editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+node_modules/
+*.log
+
+# Rastros do Playwright MCP
+.playwright-mcp/

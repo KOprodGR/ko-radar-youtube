@@ -1,0 +1,12 @@
+chave,valor
+duracao_max_s,90
+inscritos_max,50000
+views_min,5000
+janela_dias,14
+resultados_por_busca,50
+limite_search_dia,10
+filtrar_idioma,sim
+top_por_nicho_email,5
+teste_num_nichos,3
+teste_palavras_por_nicho,2
+email_destino,
