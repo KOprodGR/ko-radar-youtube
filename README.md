@@ -133,4 +133,4 @@ O radar usa só a **API oficial** do YouTube (YouTube Data API v3) e respeita a 
 
 ## Licença
 
-Defina a licença antes de publicar (por exemplo, MIT) e adicione um arquivo `LICENSE`.
+[MIT](LICENSE) © 2026 KO Production.
